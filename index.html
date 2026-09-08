@@ -11,6 +11,16 @@
   address bar for a casual glance. Trust this page the way you'd trust any
   other link a friend sent you.
 
+  The payload deliberately carries no participant names — this link can get
+  shared to a whole group at once, and nobody needs to see everyone else's
+  amount attached to their name. It also deliberately carries no paid/unpaid
+  status: a link is frozen the instant it's sent, so anything it claimed
+  about "who's already paid" would be stale the moment someone new pays
+  after that. There's no honest way for a static page to reflect live
+  state, so this doesn't try — it shows the payee's own share instead
+  (payeeShare), which IS meaningful frozen: it's simply what they covered
+  themselves, not a claim about anything that changes over time.
+
   Deploy: push this file (and this file alone) to a GitHub Pages branch/repo,
   then point PaymentLinkEncoder.baseURLString at wherever it ends up.
 -->
@@ -20,6 +30,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Payment Request</title>
 <meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light;
@@ -29,8 +42,6 @@
     --card: #FFFFFF;
     --border: #E5D9C3;
     --accent: #B8916B;
-    --green: #3F7D5C;
-    --green-bg: #E3EFE7;
   }
   * { box-sizing: border-box; }
   body {
@@ -40,12 +51,27 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 480px; margin: 0 auto; padding: 24px 18px 48px; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 20px 18px 48px; }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 22px;
+  }
+  .brand-mark {
+    font-family: "Newsreader", Georgia, serif;
+    font-weight: 700; font-size: 20px; letter-spacing: -0.01em;
+  }
+  .brand-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
   .eyebrow {
     font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--subtext); margin: 0 0 6px;
   }
-  h1 { font-size: 24px; margin: 0 0 4px; line-height: 1.25; }
+  h1 {
+    font-family: "Newsreader", Georgia, serif;
+    font-weight: 600;
+    font-size: 24px; margin: 0 0 4px; line-height: 1.25;
+  }
   .subtitle { color: var(--subtext); font-size: 14px; margin: 0 0 24px; }
   .card {
     background: var(--card); border: 1px solid var(--border); border-radius: 16px;
@@ -59,8 +85,8 @@
   .item-desc { font-size: 14px; }
   .item-date { font-size: 11px; color: var(--subtext); }
   .amount { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .person-name { font-weight: 600; font-size: 15px; }
-  .person-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .person-label { font-weight: 600; font-size: 15px; color: var(--subtext); }
+  .person-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
   .btn {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 13px; font-weight: 600; text-decoration: none;
@@ -68,14 +94,17 @@
     white-space: nowrap;
   }
   .btn-pay { background: var(--ink); color: var(--cream); }
-  .btn-paid { background: var(--green-bg); color: var(--green); }
   .btn-secondary { background: var(--border); color: var(--ink); }
   .total-card {
     background: var(--ink); color: var(--cream); border-radius: 16px;
     padding: 18px; margin-bottom: 20px;
   }
   .total-card .eyebrow { color: rgba(245,236,218,0.5); }
-  .total-amount { font-size: 30px; font-weight: 700; margin: 0; }
+  .total-amount { font-family: "Newsreader", Georgia, serif; font-size: 30px; font-weight: 600; margin: 0; }
+  .own-share {
+    font-size: 12px; color: rgba(245,236,218,0.6); margin: 10px 0 0;
+    padding-top: 10px; border-top: 1px solid rgba(245,236,218,0.15);
+  }
   .footnote { font-size: 12px; color: var(--subtext); text-align: center; margin-top: 28px; line-height: 1.5; }
   .error { text-align: center; padding: 60px 20px; color: var(--subtext); }
   [hidden] { display: none !important; }
@@ -84,13 +113,19 @@
 <body>
   <div class="wrap">
     <div id="content" hidden>
-      <p class="eyebrow">Payment request</p>
+      <div class="brand">
+        <span class="brand-mark">Tab</span>
+        <span class="brand-dot"></span>
+        <span class="eyebrow" style="margin:0">Payment request</span>
+      </div>
+
       <h1 id="title"></h1>
       <p class="subtitle" id="fromLine"></p>
 
       <div class="total-card">
-        <p class="eyebrow">Total</p>
+        <p class="eyebrow">Total requested</p>
         <p class="total-amount" id="totalAmount"></p>
+        <p class="own-share" id="ownShareLine" hidden></p>
       </div>
 
       <div id="itemsCard" class="card"></div>
@@ -146,7 +181,7 @@
     return "upi://pay?" + params.toString();
   }
 
-  function buildWhatsAppConfirmLink(payload, personName, amount) {
+  function buildWhatsAppConfirmLink(payload, amount) {
     const text = `Paid my ${formatCurrency(amount)} for "${payload.title}" ✅`;
     return "https://wa.me/?text=" + encodeURIComponent(text);
   }
@@ -154,10 +189,21 @@
   function render(payload) {
     document.getElementById("title").textContent = payload.title;
     document.getElementById("fromLine").textContent =
-      `Requested by ${payload.payeeName} · ${payload.participants.length} ${payload.participants.length === 1 ? "person" : "people"}`;
+      `Requested by ${payload.payeeName} · ${payload.participants.length} ${payload.participants.length === 1 ? "entry" : "entries"}`;
 
     const total = payload.participants.reduce((sum, p) => sum + Number(p.amount), 0);
     document.getElementById("totalAmount").textContent = formatCurrency(total);
+
+    // The payee's own share — frozen, not a live status, so this is safe to
+    // state plainly: it's simply what they covered themselves and doesn't
+    // change after the fact. Only shown when it's actually nonzero — an
+    // expense the payee didn't personally have a share of (e.g. paid
+    // entirely on someone else's behalf) has nothing to show here.
+    const ownShareLine = document.getElementById("ownShareLine");
+    if (payload.payeeShare && Number(payload.payeeShare) > 0) {
+      ownShareLine.textContent = `${payload.payeeName} also covered ${formatCurrency(payload.payeeShare)} of this themselves`;
+      ownShareLine.hidden = false;
+    }
 
     const itemsCard = document.getElementById("itemsCard");
     if (payload.items && payload.items.length) {
@@ -177,15 +223,18 @@
       itemsCard.hidden = true;
     }
 
+    // No names on these rows by design — this link can be shared to a whole
+    // group at once, and nobody needs to see anyone else's amount attached
+    // to their name to find their own.
     const peopleCard = document.getElementById("peopleCard");
     payload.participants.forEach((person) => {
       const row = document.createElement("div");
       row.className = "person-row";
       const upiLink = buildUpiLink(payload, person.amount, payload.title);
-      const waLink = buildWhatsAppConfirmLink(payload, person.name, person.amount);
+      const waLink = buildWhatsAppConfirmLink(payload, person.amount);
       row.innerHTML = `
         <div>
-          <div class="person-name">${escapeHtml(person.name)}</div>
+          <div class="person-label">Entry</div>
           <div class="amount">${formatCurrency(person.amount)}</div>
         </div>
         <div class="person-actions">
