@@ -11,15 +11,14 @@
   address bar for a casual glance. Trust this page the way you'd trust any
   other link a friend sent you.
 
-  The payload deliberately carries no participant names — this link can get
-  shared to a whole group at once, and nobody needs to see everyone else's
-  amount attached to their name. It also deliberately carries no paid/unpaid
-  status: a link is frozen the instant it's sent, so anything it claimed
-  about "who's already paid" would be stale the moment someone new pays
-  after that. There's no honest way for a static page to reflect live
-  state, so this doesn't try — it shows the payee's own share instead
-  (payeeShare), which IS meaningful frozen: it's simply what they covered
-  themselves, not a claim about anything that changes over time.
+  The payload deliberately carries no paid/unpaid status: a link is frozen
+  the instant it's sent, so anything it claimed about "who's already paid"
+  would be stale the moment someone new pays after that. There's no honest
+  way for a static page to reflect live state, so this doesn't try. It does
+  carry names — useful for finding your own row when this link's shared to
+  a whole group at once — and the payee's own row sits in the very same
+  table, marked isPayee, with no Pay button: it's there so the table reads
+  as the full split, not just a one-sided ask.
 
   Deploy: push this file (and this file alone) to a GitHub Pages branch/repo,
   then point PaymentLinkEncoder.baseURLString at wherever it ends up.
@@ -85,7 +84,8 @@
   .item-desc { font-size: 14px; }
   .item-date { font-size: 11px; color: var(--subtext); }
   .amount { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .person-label { font-weight: 600; font-size: 15px; color: var(--subtext); }
+  .person-name { font-weight: 600; font-size: 15px; }
+  .covered-tag { font-size: 11px; color: var(--subtext); margin-top: 1px; }
   .person-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
   .btn {
     display: inline-flex; align-items: center; gap: 6px;
@@ -101,10 +101,6 @@
   }
   .total-card .eyebrow { color: rgba(245,236,218,0.5); }
   .total-amount { font-family: "Newsreader", Georgia, serif; font-size: 30px; font-weight: 600; margin: 0; }
-  .own-share {
-    font-size: 12px; color: rgba(245,236,218,0.6); margin: 10px 0 0;
-    padding-top: 10px; border-top: 1px solid rgba(245,236,218,0.15);
-  }
   .footnote { font-size: 12px; color: var(--subtext); text-align: center; margin-top: 28px; line-height: 1.5; }
   .error { text-align: center; padding: 60px 20px; color: var(--subtext); }
   [hidden] { display: none !important; }
@@ -125,7 +121,6 @@
       <div class="total-card">
         <p class="eyebrow">Total requested</p>
         <p class="total-amount" id="totalAmount"></p>
-        <p class="own-share" id="ownShareLine" hidden></p>
       </div>
 
       <div id="itemsCard" class="card"></div>
@@ -188,22 +183,16 @@
 
   function render(payload) {
     document.getElementById("title").textContent = payload.title;
+
+    // The payee's own row (isPayee) is part of the same table for
+    // transparency, but it's not part of what's being *asked for* — the
+    // headline count and total both stay scoped to actual participants.
+    const asks = payload.participants.filter((p) => !p.isPayee);
     document.getElementById("fromLine").textContent =
-      `Requested by ${payload.payeeName} · ${payload.participants.length} ${payload.participants.length === 1 ? "entry" : "entries"}`;
+      `Requested by ${payload.payeeName} · ${asks.length} ${asks.length === 1 ? "person" : "people"}`;
 
-    const total = payload.participants.reduce((sum, p) => sum + Number(p.amount), 0);
+    const total = asks.reduce((sum, p) => sum + Number(p.amount), 0);
     document.getElementById("totalAmount").textContent = formatCurrency(total);
-
-    // The payee's own share — frozen, not a live status, so this is safe to
-    // state plainly: it's simply what they covered themselves and doesn't
-    // change after the fact. Only shown when it's actually nonzero — an
-    // expense the payee didn't personally have a share of (e.g. paid
-    // entirely on someone else's behalf) has nothing to show here.
-    const ownShareLine = document.getElementById("ownShareLine");
-    if (payload.payeeShare && Number(payload.payeeShare) > 0) {
-      ownShareLine.textContent = `${payload.payeeName} also covered ${formatCurrency(payload.payeeShare)} of this themselves`;
-      ownShareLine.hidden = false;
-    }
 
     const itemsCard = document.getElementById("itemsCard");
     if (payload.items && payload.items.length) {
@@ -223,24 +212,32 @@
       itemsCard.hidden = true;
     }
 
-    // No names on these rows by design — this link can be shared to a whole
-    // group at once, and nobody needs to see anyone else's amount attached
-    // to their name to find their own.
     const peopleCard = document.getElementById("peopleCard");
     payload.participants.forEach((person) => {
       const row = document.createElement("div");
       row.className = "person-row";
-      const upiLink = buildUpiLink(payload, person.amount, payload.title);
-      const waLink = buildWhatsAppConfirmLink(payload, person.amount);
-      row.innerHTML = `
-        <div>
-          <div class="person-label">Entry</div>
-          <div class="amount">${formatCurrency(person.amount)}</div>
-        </div>
-        <div class="person-actions">
-          <a class="btn btn-pay" href="${upiLink}">Pay</a>
-          <a class="btn btn-secondary" href="${waLink}" target="_blank" rel="noopener">I've paid</a>
-        </div>`;
+      if (person.isPayee) {
+        // Informational only — no Pay button, since paying yourself isn't
+        // a thing. Here so the table reads as the whole split.
+        row.innerHTML = `
+          <div>
+            <div class="person-name">${escapeHtml(person.name)}</div>
+            <div class="covered-tag">covered by them, not requested</div>
+          </div>
+          <div class="amount">${formatCurrency(person.amount)}</div>`;
+      } else {
+        const upiLink = buildUpiLink(payload, person.amount, payload.title);
+        const waLink = buildWhatsAppConfirmLink(payload, person.amount);
+        row.innerHTML = `
+          <div>
+            <div class="person-name">${escapeHtml(person.name)}</div>
+            <div class="amount">${formatCurrency(person.amount)}</div>
+          </div>
+          <div class="person-actions">
+            <a class="btn btn-pay" href="${upiLink}">Pay</a>
+            <a class="btn btn-secondary" href="${waLink}" target="_blank" rel="noopener">I've paid</a>
+          </div>`;
+      }
       peopleCard.appendChild(row);
     });
 
